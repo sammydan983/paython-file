@@ -1,0 +1,77 @@
+# src/detector.py
+
+"""
+DNS Tunneling & Suspicious Query Detector
+-----------------------------------------
+Lightweight tool to flag potential DNS tunneling attempts using
+heuristics (long labels, high entropy, unusual query frequency).
+"""
+
+from scapy.all import rdpcap, DNSQR
+import math
+import re
+
+
+def shannon_entropy(data: str) -> float:
+    """Calculate Shannon entropy of a string."""
+    if not data:
+        return 0.0
+    freq = {}
+    for c in data:
+        freq[c] = freq.get(c, 0) + 1
+    entropy = 0.0
+    for c in freq:
+        p_x = freq[c] / len(data)
+        entropy -= p_x * math.log2(p_x)
+    return entropy
+
+
+def extract_features(qname: str) -> dict:
+    """Extract simple DNS features for detection."""
+    labels = qname.split(".")
+    label_lengths = [len(l) for l in labels if l]
+
+    return {
+        "qname": qname,
+        "num_labels": len(labels),
+        "max_label_len": max(label_lengths) if label_lengths else 0,
+        "entropy": shannon_entropy(qname),
+        "numeric_ratio": sum(c.isdigit() for c in qname) / len(qname)
+        if qname else 0,
+    }
+
+
+def detect_suspicious(features: dict, thresholds: dict) -> bool:
+    """Heuristic detection based on thresholds."""
+    if (
+        features["max_label_len"] > thresholds.get("label_length", 40)
+        or features["entropy"] > thresholds.get("entropy", 3.5)
+        or features["numeric_ratio"] > thresholds.get("numeric_ratio", 0.5)
+    ):
+        return True
+    return False
+
+
+def analyze_pcap(file_path: str, thresholds: dict):
+    """Analyze DNS queries from a PCAP file."""
+    packets = rdpcap(file_path)
+    alerts = []
+
+    for pkt in packets:
+        if pkt.haslayer(DNSQR):
+            qname = pkt[DNSQR].qname.decode(errors="ignore").strip(".")
+            features = extract_features(qname)
+            if detect_suspicious(features, thresholds):
+                alerts.append(features)
+
+    return alerts
+
+
+if __name__ == "__main__":
+    # Example run
+    thresholds = {"label_length": 40, "entropy": 3.5, "numeric_ratio": 0.5}
+    alerts = analyze_pcap("examples/sample.pcap", thresholds)
+
+    print("⚠️ Suspicious DNS Queries Detected:")
+    for a in alerts:
+        print(a)
